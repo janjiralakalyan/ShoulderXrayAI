@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: shoulder-xray-backend
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: MODEL_PATH
+        value: /app/backend/model.h5
