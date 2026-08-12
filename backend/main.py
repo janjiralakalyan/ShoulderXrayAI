@@ -37,10 +37,47 @@ logger = logging.getLogger("shoulder-xray-api")
 logging.basicConfig(level=logging.INFO)
 
 # ─────────────────────────────────────────────
-# Model Loading (lifespan)
+# Model Loading Helper & Lifespan
 # ─────────────────────────────────────────────
 
 model = None
+
+
+def load_model_safely(model_path: str):
+    """Load model with fallbacks for Keras 3 quantization_config compatibility."""
+    # Patch Keras 3 Operation.from_config to strip unrecognized quantization_config if present
+    try:
+        import keras.src.ops.operation as keras_op
+        _orig_from_config = keras_op.Operation.from_config
+
+        @classmethod
+        def _patched_from_config(cls, config):
+            if isinstance(config, dict):
+                config = config.copy()
+                config.pop("quantization_config", None)
+            return _orig_from_config(config)
+
+        keras_op.Operation.from_config = _patched_from_config
+    except Exception:
+        pass
+
+    # Try standard tf.keras load with compile=False
+    try:
+        loaded = tf.keras.models.load_model(model_path, compile=False)
+        logger.info("Model loaded successfully with tf.keras.")
+        return loaded
+    except Exception as err:
+        logger.warning(f"Standard tf.keras load failed ({err}). Trying tf_keras legacy loader...")
+
+    # Fallback to tf_keras if installed
+    try:
+        import tf_keras
+        loaded = tf_keras.models.load_model(model_path, compile=False)
+        logger.info("Model loaded successfully with tf_keras legacy format.")
+        return loaded
+    except Exception as err2:
+        logger.error(f"tf_keras load failed: {err2}")
+        raise err
 
 
 @asynccontextmanager
@@ -52,13 +89,13 @@ async def lifespan(app: FastAPI):
         logger.error(
             "Please run the training script first or set MODEL_PATH env var."
         )
-        # Allow the app to start anyway for development; /predict will 503
     else:
         logger.info(f"Loading model from {MODEL_PATH} ...")
-        model = tf.keras.models.load_model(MODEL_PATH)
-        logger.info("Model loaded successfully.")
+        model = load_model_safely(MODEL_PATH)
+        logger.info("Model setup complete.")
     yield
     logger.info("Shutting down.")
+
 
 
 # ─────────────────────────────────────────────
